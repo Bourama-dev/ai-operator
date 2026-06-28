@@ -4,53 +4,79 @@ const fs = require('fs');
 const path = require('path');
 const { transcribeAudio } = require('../services/whisper');
 const { chat } = require('../services/claude');
+const { callLevcoBrain, isConfigured: brainConfigured } = require('../services/levco');
 const { synthesizeSpeech } = require('../services/tts');
 
 const router = express.Router();
 const upload = multer({ dest: '/tmp/uploads/' });
 
-// In-memory session store (replace with Redis for production)
+// Fallback session store for direct-Claude mode
 const sessions = new Map();
 
-// POST /voice/transcribe
-// Accepts: multipart/form-data with field "audio" (m4a/wav/webm)
-// Returns: { transcript, response, audioUrl, isAction, actionData }
-router.post('/transcribe', upload.single('audio'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No audio file uploaded' });
+// ─────────────────────────────────────────────────────────────
+// Shared helper: take a raw AI result (n8n or Claude) and
+// return a normalized shape for the mobile client.
+// ─────────────────────────────────────────────────────────────
+function normalizeResult(result) {
+  return {
+    response:    result.response  ?? '',
+    isAction:    result.isAction  ?? false,
+    actionData:  result.actionData ?? null,
+    showCard:    result.showCard  ?? false,
+    tasks:       result.tasks     ?? null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Route brain: n8n Levco Brain si configuré, sinon Claude direct
+// ─────────────────────────────────────────────────────────────
+async function runBrain(transcript, sessionId) {
+  if (brainConfigured()) {
+    console.log(`[brain] → n8n Levco Brain (session: ${sessionId})`);
+    const result = await callLevcoBrain(transcript, sessionId);
+    return normalizeResult(result);
   }
+
+  // Fallback: Claude direct
+  console.log(`[brain] → Claude direct (session: ${sessionId})`);
+  const history = sessions.get(sessionId) || [];
+  const claudeResult = await chat(transcript, history);
+  sessions.set(sessionId, claudeResult.updatedHistory.slice(-20));
+
+  return normalizeResult({
+    response:   claudeResult.isAction ? claudeResult.parsed.confirmation_message : claudeResult.raw,
+    isAction:   claudeResult.isAction,
+    actionData: claudeResult.isAction ? claudeResult.parsed : null,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /voice/transcribe
+// Accepts : multipart/form-data, field "audio" (m4a/wav/webm)
+// Returns : { transcript, response, audioUrl, isAction, actionData, showCard, tasks }
+// ─────────────────────────────────────────────────────────────
+router.post('/transcribe', upload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
 
   const sessionId = req.headers['x-session-id'] || 'default';
   const audioPath = req.file.path;
 
   try {
-    // 1. Transcribe audio
     const transcript = await transcribeAudio(audioPath);
+    console.log(`[transcribe] "${transcript}" (session: ${sessionId})`);
 
-    // 2. Get conversation history for this session
-    const history = sessions.get(sessionId) || [];
+    const brain = await runBrain(transcript, sessionId);
 
-    // 3. Send to Claude
-    const claudeResult = await chat(transcript, history);
-
-    // 4. Update session history
-    sessions.set(sessionId, claudeResult.updatedHistory.slice(-20)); // Keep last 20 messages
-
-    // 5. Determine TTS text
-    const ttsText = claudeResult.isAction
-      ? claudeResult.parsed.confirmation_message
-      : claudeResult.raw;
-
-    // 6. Generate audio response
-    const audioFilePath = await synthesizeSpeech(ttsText);
-    const audioFileName = path.basename(audioFilePath);
+    const audioFilePath = await synthesizeSpeech(brain.response);
 
     res.json({
       transcript,
-      response: ttsText,
-      audioUrl: `/audio/${audioFileName}`,
-      isAction: claudeResult.isAction,
-      actionData: claudeResult.isAction ? claudeResult.parsed : null,
+      response:   brain.response,
+      audioUrl:   `/audio/${path.basename(audioFilePath)}`,
+      isAction:   brain.isAction,
+      actionData: brain.actionData,
+      showCard:   brain.showCard,
+      tasks:      brain.tasks,
     });
   } catch (err) {
     console.error('[/transcribe]', err);
@@ -60,31 +86,26 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// POST /voice/chat
-// Accepts: { message: string, sessionId?: string }
-// For text-based testing without audio
+// ─────────────────────────────────────────────────────────────
+// POST /voice/chat  (tests texte, sans audio)
+// Accepts : { message: string, sessionId?: string }
+// ─────────────────────────────────────────────────────────────
 router.post('/chat', async (req, res) => {
   const { message, sessionId = 'default' } = req.body;
   if (!message) return res.status(400).json({ error: 'message is required' });
 
   try {
-    const history = sessions.get(sessionId) || [];
-    const claudeResult = await chat(message, history);
-    sessions.set(sessionId, claudeResult.updatedHistory.slice(-20));
-
-    const ttsText = claudeResult.isAction
-      ? claudeResult.parsed.confirmation_message
-      : claudeResult.raw;
-
-    const audioFilePath = await synthesizeSpeech(ttsText);
-    const audioFileName = path.basename(audioFilePath);
+    const brain = await runBrain(message, sessionId);
+    const audioFilePath = await synthesizeSpeech(brain.response);
 
     res.json({
       transcript: message,
-      response: ttsText,
-      audioUrl: `/audio/${audioFileName}`,
-      isAction: claudeResult.isAction,
-      actionData: claudeResult.isAction ? claudeResult.parsed : null,
+      response:   brain.response,
+      audioUrl:   `/audio/${path.basename(audioFilePath)}`,
+      isAction:   brain.isAction,
+      actionData: brain.actionData,
+      showCard:   brain.showCard,
+      tasks:      brain.tasks,
     });
   } catch (err) {
     console.error('[/chat]', err);
@@ -92,22 +113,23 @@ router.post('/chat', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────
 // POST /voice/confirm
-// Called after user confirms an action
-// Accepts: { actionData: object, sessionId?: string }
+// Déclenche l'action CRM validée par l'utilisateur
+// Accepts : { actionData: object, sessionId?: string }
+// ─────────────────────────────────────────────────────────────
 router.post('/confirm', async (req, res) => {
   const { actionData, sessionId = 'default' } = req.body;
   if (!actionData) return res.status(400).json({ error: 'actionData is required' });
 
   try {
-    // Trigger n8n webhook for the action
     const n8nResult = await triggerN8nAction(actionData);
 
-    const confirmationText = `C'est fait. ${actionData.action === 'create_contact' ? 'Le contact a été créé.' : 'L\'action a été effectuée.'} Y a-t-il autre chose ?`;
+    const confirmationText = buildConfirmationText(actionData.action);
     const audioFilePath = await synthesizeSpeech(confirmationText);
 
     res.json({
-      success: true,
+      success:  true,
       response: confirmationText,
       audioUrl: `/audio/${path.basename(audioFilePath)}`,
       n8nResult,
@@ -118,24 +140,48 @@ router.post('/confirm', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+function buildConfirmationText(action) {
+  const messages = {
+    create_contact: 'Contact créé. Y a-t-il autre chose ?',
+    update_deal:    'Deal mis à jour. Y a-t-il autre chose ?',
+    send_email:     'Email envoyé. Y a-t-il autre chose ?',
+  };
+  return messages[action] ?? "C'est fait. Y a-t-il autre chose ?";
+}
+
 async function triggerN8nAction(actionData) {
   const { action, data } = actionData;
-  const webhookUrl = `${process.env.N8N_WEBHOOK_URL}/${action}`;
 
-  const response = await fetch(webhookUrl, {
+  // Utilise le Brain si configuré (il gère toutes les actions)
+  if (brainConfigured()) {
+    const res = await fetch(process.env.N8N_BRAIN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.N8N_API_KEY && { Authorization: `Bearer ${process.env.N8N_API_KEY}` }),
+      },
+      body: JSON.stringify({ action, data, confirmed: true }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) throw new Error(`n8n Brain action failed: ${res.status}`);
+    return res.json();
+  }
+
+  // Fallback: webhook d'action dédié
+  const webhookUrl = `${process.env.N8N_WEBHOOK_URL}/${action}`;
+  const res = await fetch(webhookUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.N8N_API_KEY}`,
+      ...(process.env.N8N_API_KEY && { Authorization: `Bearer ${process.env.N8N_API_KEY}` }),
     },
     body: JSON.stringify(data),
   });
-
-  if (!response.ok) {
-    throw new Error(`n8n webhook failed: ${response.status}`);
-  }
-
-  return response.json();
+  if (!res.ok) throw new Error(`n8n webhook failed: ${res.status}`);
+  return res.json();
 }
 
 module.exports = router;

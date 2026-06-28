@@ -34,6 +34,7 @@ export default function MainScreen() {
   const [transcript, setTranscript] = useState('');
   const [aiResponse, setAiResponse] = useState('');
   const [showCard, setShowCard] = useState(false);
+  const [contextTasks, setContextTasks] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ visible: false, message: '', actionData: null });
   const [confirmLoading, setConfirmLoading] = useState(false);
 
@@ -118,13 +119,18 @@ export default function MainScreen() {
         timeout: 30000,
       });
 
-      const { transcript: t, response: r, audioUrl, isAction, actionData } = res.data;
+      const { transcript: t, response: r, audioUrl, isAction, actionData, showCard: cardFlag, tasks } = res.data;
       setTranscript(t);
       setAiResponse(r);
       setVoiceState('speaking');
 
-      if (isAction && actionData) {
+      // Carte contextuelle (todo, pipeline, etc. poussés par n8n)
+      if (cardFlag || tasks) {
+        setContextTasks(tasks || null);
         setShowCard(true);
+      }
+
+      if (isAction && actionData) {
         setConfirmModal({
           visible: true,
           message: actionData.confirmation_message || r,
@@ -182,6 +188,7 @@ export default function MainScreen() {
     setTranscript('');
     setAiResponse('');
     setShowCard(false);
+    setContextTasks(null);
     Animated.parallel([
       Animated.timing(greetingOpacity, { toValue: 1, duration: 500, useNativeDriver: true }),
       Animated.timing(greetingTransY, { toValue: 0, duration: 500, useNativeDriver: true }),
@@ -280,8 +287,8 @@ export default function MainScreen() {
         <Text style={styles.hint}>Levco t'écoute · Parle naturellement</Text>
       </View>
 
-      {/* Context card overlay */}
-      <ContextCard visible={showCard} />
+      {/* Context card overlay — tâches poussées par n8n ou données statiques */}
+      <ContextCard visible={showCard} tasks={contextTasks || undefined} />
 
       {/* Wave visualizer */}
       <WaveVisualizer visible={waveVisible} intensity={waveIntensity} />
