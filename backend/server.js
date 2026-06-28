@@ -13,6 +13,9 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Web app frontend
+app.use(express.static(path.join(__dirname, '../web')));
+
 // Serve generated TTS audio files
 const TMP_DIR = '/tmp';
 app.use('/audio', (req, res, next) => {
