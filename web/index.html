@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Levco — AI Operator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #09080f;
+    --purple: #7c5cfc;
+    --accent: #c4aaff;
+    --text: #f0ecff;
+    --text-muted: rgba(240,236,255,0.45);
+    --text-dim: rgba(240,236,255,0.22);
+    --border: rgba(138,110,230,0.16);
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .bg-glow {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% 60%, rgba(90,55,200,0.18) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 30% at 50% 65%, rgba(124,92,252,0.12) 0%, transparent 60%);
+  }
+
+  .shell {
+    position: relative; z-index: 1; height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: space-between; padding: 48px 32px 52px;
+  }
+
+  /* ── Top bar ── */
+  .topbar {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo { display: flex; align-items: center; gap: 9px; }
+  .logo-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #2ecc71;
+    box-shadow: 0 0 8px rgba(46,204,113,0.8);
+    animation: live-pulse 2s infinite;
+  }
+  @keyframes live-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+  .logo-name { font-size: 13px; font-weight: 600; letter-spacing: .06em; }
+  .logo-op {
+    font-size: 10px; font-weight: 500; color: var(--accent);
+    opacity: .6; margin-left: 4px; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .session-info { font-size: 11px; color: var(--text-dim); letter-spacing: .05em; }
+
+  /* ── Stage ── */
+  .stage {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 0; flex: 1; justify-content: center;
+  }
+
+  .greeting {
+    text-align: center; margin-bottom: 56px;
+    transition: opacity .5s, transform .5s;
+  }
+  .greeting h1 { font-size: 28px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 8px; }
+  .greeting p { font-size: 15px; color: var(--text-muted); font-weight: 300; }
+  .greeting.hidden {
+    opacity: 0; transform: translateY(-10px);
+    pointer-events: none; position: absolute;
+  }
+
+  /* ── Orb ── */
+  .orb-wrap {
+    position: relative; width: 200px; height: 200px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; touch-action: none;
+  }
+  .ring {
+    position: absolute; border-radius: 50%;
+    border: 1px solid rgba(124,92,252,0.2);
+    animation: ring-expand 3s ease-out infinite;
+    pointer-events: none;
+  }
+  .ring:nth-child(1) { width:220px; height:220px; animation-delay:0s; }
+  .ring:nth-child(2) { width:270px; height:270px; animation-delay:.7s; }
+  .ring:nth-child(3) { width:330px; height:330px; animation-delay:1.4s; }
+  @keyframes ring-expand {
+    0%   { opacity:.5; transform:scale(.85); }
+    100% { opacity:0;  transform:scale(1.15); }
+  }
+  .orb {
+    width: 130px; height: 130px; border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%, #e0d0ff 0%, #9b7eff 28%, #6040e0 55%, #2a1880 80%, #110a40 100%);
+    box-shadow: 0 0 40px rgba(124,92,252,.55), 0 0 100px rgba(90,55,200,.3), inset 0 2px 20px rgba(255,255,255,.15);
+    position: relative; z-index: 2;
+    transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+    animation: orb-breathe 4s ease-in-out infinite;
+  }
+  @keyframes orb-breathe {
+    0%,100% { transform:scale(1);    box-shadow:0 0 40px rgba(124,92,252,.55),0 0 100px rgba(90,55,200,.3),inset 0 2px 20px rgba(255,255,255,.15); }
+    50%      { transform:scale(1.05); box-shadow:0 0 60px rgba(124,92,252,.75),0 0 140px rgba(90,55,200,.4),inset 0 2px 20px rgba(255,255,255,.2); }
+  }
+  .orb.listening { animation: orb-listen .8s ease-in-out infinite alternate; }
+  @keyframes orb-listen {
+    from { transform:scale(1.0);  box-shadow:0 0 50px rgba(124,92,252,.6),0 0 100px rgba(90,55,200,.3),inset 0 2px 20px rgba(255,255,255,.15); }
+    to   { transform:scale(1.12); box-shadow:0 0 80px rgba(180,140,255,.9),0 0 160px rgba(124,92,252,.5),inset 0 2px 24px rgba(255,255,255,.25); }
+  }
+  .orb.speaking {
+    animation: orb-speak .5s ease-in-out infinite alternate;
+    background: radial-gradient(circle at 38% 32%, #fff 0%, #c4aaff 20%, #9b7eff 45%, #6040e0 65%, #2a1880 85%);
+  }
+  @keyframes orb-speak {
+    from { transform:scale(1.0); }
+    to   { transform:scale(1.08); }
+  }
+
+  .status-label {
+    margin-top: 36px; font-size: 11px; font-weight: 600;
+    letter-spacing: .18em; text-transform: uppercase; color: var(--text-dim);
+    text-align: center; height: 16px; transition: color .3s;
+  }
+  .status-label.active { color: var(--accent); }
+
+  .transcript {
+    margin-top: 28px; min-height: 52px; max-width: 480px;
+    width: 100%; text-align: center; padding: 0 8px;
+  }
+  .transcript-text {
+    font-size: 16px; font-weight: 300; line-height: 1.65;
+    opacity: 0; transition: opacity .4s;
+  }
+  .transcript-text.visible { opacity: 1; }
+  .transcript-user   { color: rgba(196,170,255,.7); font-style: italic; }
+  .transcript-ai     { color: rgba(240,236,255,.9); margin-top: 10px; }
+
+  /* ── Context card ── */
+  .context-card {
+    position: fixed; bottom: 120px;
+    left: 50%; transform: translateX(-50%) translateY(20px);
+    background: rgba(22,18,40,.96);
+    border: 1px solid var(--border); border-radius: 18px;
+    padding: 18px 22px; min-width: 320px; max-width: 480px; width: 90%;
+    backdrop-filter: blur(20px);
+    opacity: 0; transition: opacity .4s, transform .4s;
+    pointer-events: none; z-index: 10;
+  }
+  .context-card.visible {
+    opacity: 1; transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+  }
+  .card-label {
+    font-size: 9px; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); opacity: .7; margin-bottom: 12px;
+  }
+  .task-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0; border-bottom: 1px solid var(--border); gap: 12px;
+  }
+  .task-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .task-info { display: flex; align-items: center; gap: 10px; }
+  .task-icon { font-size: 15px; }
+  .task-name { font-size: 13px; font-weight: 500; }
+  .task-sub  { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+  .tag {
+    font-size: 9px; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 6px; flex-shrink: 0;
+  }
+  .tag.red    { background:rgba(255,77,106,.15);  color:#ff4d6a; border:1px solid rgba(255,77,106,.25); }
+  .tag.orange { background:rgba(255,159,67,.15);  color:#ff9f43; border:1px solid rgba(255,159,67,.25); }
+  .tag.yellow { background:rgba(248,195,30,.15);  color:#f8c31e; border:1px solid rgba(248,195,30,.25); }
+  .tag.green  { background:rgba(46,204,113,.15);  color:#2ecc71; border:1px solid rgba(46,204,113,.25); }
+
+  /* ── Confirm overlay ── */
+  .confirm-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 40px; z-index: 30;
+    opacity: 0; pointer-events: none;
+    transition: opacity .3s;
+  }
+  .confirm-overlay.visible { opacity: 1; pointer-events: auto; }
+  .confirm-box {
+    background: rgba(22,18,42,.98); border: 1px solid var(--border);
+    border-radius: 20px; padding: 24px; width: 90%; max-width: 420px;
+    backdrop-filter: blur(24px);
+    transform: translateY(20px); transition: transform .3s;
+  }
+  .confirm-overlay.visible .confirm-box { transform: translateY(0); }
+  .confirm-msg {
+    font-size: 16px; font-weight: 400; line-height: 1.6;
+    color: var(--text); text-align: center; margin-bottom: 24px;
+  }
+  .confirm-actions { display: flex; gap: 12px; }
+  .btn {
+    flex: 1; padding: 13px; border-radius: 12px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    font-family: 'Inter', sans-serif; transition: opacity .2s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn-cancel  { background: rgba(255,255,255,.07); color: rgba(240,236,255,.5); }
+  .btn-confirm { background: var(--purple); color: #fff; }
+
+  /* ── Bottom controls ── */
+  .bottom {
+    width: 100%; display: flex; flex-direction: column;
+    align-items: center; gap: 20px;
+  }
+  .hint { font-size: 11px; color: var(--text-dim); letter-spacing: .04em; text-align: center; }
+  .tap-btn {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(124,92,252,.12); border: 1px solid rgba(124,92,252,.28);
+    border-radius: 100px; padding: 12px 28px;
+    font-size: 13px; font-weight: 500; color: var(--accent);
+    cursor: pointer; letter-spacing: .04em; transition: all .2s;
+    font-family: 'Inter', sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+  .tap-btn:hover { background:rgba(124,92,252,.2); border-color:rgba(124,92,252,.45); }
+  .tap-btn.holding { background:rgba(239,68,68,.15); border-color:rgba(239,68,68,.4); color:#fca5a5; }
+  .tap-btn.hidden  { opacity:0; pointer-events:none; transform:translateY(8px); }
+  .end-btn {
+    background: none; border: none; font-size: 11px; color: var(--text-dim);
+    cursor: pointer; letter-spacing: .06em; padding: 6px 12px;
+    border-radius: 8px; transition: color .2s; text-transform: uppercase;
+    font-family: 'Inter', sans-serif;
+  }
+  .end-btn:hover { color: rgba(255,77,106,.7); }
+  .end-btn.hidden { opacity:0; pointer-events:none; }
+
+  /* ── Wave ── */
+  .wave-wrap {
+    position: fixed; bottom:0; left:0; right:0; height:80px;
+    pointer-events:none; z-index:1; opacity:0; transition: opacity .4s;
+  }
+  .wave-wrap.visible { opacity:1; }
+  .wave-canvas { width:100%; height:100%; }
+
+  /* ── Error toast ── */
+  .toast {
+    position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+    background: rgba(239,68,68,.15); border: 1px solid rgba(239,68,68,.3);
+    color: #fca5a5; padding: 10px 20px; border-radius: 10px;
+    font-size: 13px; opacity: 0; transition: opacity .3s; z-index: 50;
+    pointer-events: none;
+  }
+  .toast.visible { opacity:1; }
+</style>
+</head>
+<body>
+
+<div class="bg-glow"></div>
+
+<div class="shell">
+  <div class="topbar">
+    <div class="logo">
+      <div class="logo-dot"></div>
+      <span class="logo-name">Levco <span class="logo-op">Operator</span></span>
+    </div>
+    <div class="session-info" id="session-time">Session · 00:00</div>
+  </div>
+
+  <div class="stage">
+    <div class="greeting" id="greeting">
+      <h1>Bonjour,</h1>
+      <p>qu'est-ce que je peux faire pour toi aujourd'hui ?</p>
+    </div>
+
+    <div class="orb-wrap" id="orb-wrap">
+      <div class="ring"></div>
+      <div class="ring"></div>
+      <div class="ring"></div>
+      <div class="orb" id="orb"></div>
+    </div>
+
+    <div class="status-label" id="status-label">EN ÉCOUTE…</div>
+
+    <div class="transcript">
+      <div class="transcript-text transcript-user" id="user-text"></div>
+      <div class="transcript-text transcript-ai"  id="ai-text"></div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <button class="tap-btn" id="tap-btn">
+      <span>🎙</span> Maintenir pour parler
+    </button>
+    <button class="end-btn hidden" id="end-btn" onclick="endSession()">Terminer la session</button>
+    <div class="hint">Levco t'écoute en continu · Parle naturellement</div>
+  </div>
+</div>
+
+<!-- Context card -->
+<div class="context-card" id="context-card">
+  <div class="card-label">TA TO-DO DU JOUR · CLASSÉE PAR URGENCE</div>
+  <div id="task-list"></div>
+</div>
+
+<!-- Confirm overlay -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <p class="confirm-msg" id="confirm-msg"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-cancel"  onclick="cancelAction()">Annuler</button>
+      <button class="btn btn-confirm" id="confirm-btn" onclick="confirmAction()">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Wave -->
+<div class="wave-wrap" id="wave-wrap">
+  <canvas class="wave-canvas" id="wave-canvas"></canvas>
+</div>
+
+<!-- Error toast -->
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
