@@ -1,16 +1,15 @@
 {
   "version": 2,
   "builds": [
-    {
-      "src": "backend/server.js",
-      "use": "@vercel/node"
-    }
+    { "src": "backend/server.js", "use": "@vercel/node" },
+    { "src": "web/**", "use": "@vercel/static" }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "backend/server.js"
-    }
+    { "src": "/voice/(.*)", "dest": "backend/server.js" },
+    { "src": "/webhooks/(.*)", "dest": "backend/server.js" },
+    { "src": "/audio/(.*)", "dest": "backend/server.js" },
+    { "src": "/health", "dest": "backend/server.js" },
+    { "src": "/(.*)", "dest": "web/$1" }
   ],
   "env": {
     "NODE_ENV": "production"
