@@ -37,6 +37,12 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-  console.log(`AI Operator backend running on port ${PORT}`);
-});
+// En local : démarre le serveur HTTP
+// Sur Vercel : exporte l'app (serverless, pas de listen)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`AI Operator backend running on port ${PORT}`);
+  });
+}
+
+module.exports = app;

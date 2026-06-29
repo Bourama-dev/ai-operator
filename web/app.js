@@ -2,16 +2,15 @@
 const SESSION_ID = `session-${Date.now()}`;
 
 // VAD tunables
-const SILENCE_MS       = 1500;  // silence duration before auto-send
-const SPEECH_THRESHOLD = 15;    // frequency amplitude 0-255
-const MIN_SPEECH_MS    = 400;   // ignore clips shorter than this
+const SILENCE_MS       = 1500;
+const SPEECH_THRESHOLD = 15;
+const MIN_SPEECH_MS    = 400;
 
 // ── DOM refs ────────────────────────────────────────────────────────
 const orb            = document.getElementById('orb');
 const orbWrap        = document.getElementById('orb-wrap');
 const statusLabel    = document.getElementById('status-label');
-const userText       = document.getElementById('user-text');
-const aiText         = document.getElementById('ai-text');
+const chatHistoryEl  = document.getElementById('chat-history');
 const contextCard    = document.getElementById('context-card');
 const taskList       = document.getElementById('task-list');
 const tapBtn         = document.getElementById('tap-btn');
@@ -26,23 +25,22 @@ const confirmMsg     = document.getElementById('confirm-msg');
 const confirmBtnEl   = document.getElementById('confirm-btn');
 
 // ── State ────────────────────────────────────────────────────────────
-// idle | standby | listening | processing | speaking
-let appState      = 'idle';
+let appState       = 'idle';
 let sessionStarted = false;
 let sessionSeconds = 0;
-let sessionInterval = null;
-let waveAnimId    = null;
-let wavePhase     = 0;
-let pendingAction = null;
+let sessionInterval= null;
+let waveAnimId     = null;
+let wavePhase      = 0;
+let pendingAction  = null;
 
 // VAD / recording
-let micStream      = null;
-let audioCtx       = null;
-let analyser       = null;
-let mediaRecorder  = null;
-let audioChunks    = [];
-let vadRunning     = false;
-let speechStartAt  = null;
+let micStream     = null;
+let audioCtx      = null;
+let analyser      = null;
+let mediaRecorder = null;
+let audioChunks   = [];
+let vadRunning    = false;
+let speechStartAt = null;
 
 // ── Session timer ─────────────────────────────────────────────────────
 function startTimer() {
@@ -61,18 +59,18 @@ function setState(s) {
 
   const map = {
     idle:       ['APPUYER POUR COMMENCER', false],
-    standby:    ['EN ATTENTE…',   true],
-    listening:  ['EN ÉCOUTE…',    true],
-    processing: ['ANALYSE…',      true],
-    speaking:   ['LEVCO PARLE',   true],
+    standby:    ['EN ATTENTE…',            true ],
+    listening:  ['EN ÉCOUTE…',             true ],
+    processing: ['ANALYSE…',               true ],
+    speaking:   ['LEVCO PARLE',            true ],
   };
   const [label, active] = map[s] ?? ['', false];
   statusLabel.textContent = label;
   statusLabel.className = 'status-label' + (active ? ' active' : '');
 
-  if (s === 'standby')   { orb.classList.add('standby');    stopWave(); }
-  else if (s === 'listening')  { orb.classList.add('listening');  startWave(0.45); }
-  else if (s === 'speaking')   { orb.classList.add('speaking');   startWave(1.0); }
+  if      (s === 'standby')  { orb.classList.add('standby');   stopWave(); }
+  else if (s === 'listening'){ orb.classList.add('listening');  startWave(0.45); }
+  else if (s === 'speaking') { orb.classList.add('speaking');   startWave(1.0);  }
   else stopWave();
 }
 
@@ -80,10 +78,41 @@ function setState(s) {
 function activateSession() {
   if (sessionStarted) return;
   sessionStarted = true;
+  stopWakeWord();
   greeting.classList.add('hidden');
   tapBtn.classList.add('hidden');
   endBtn.classList.remove('hidden');
+  chatHistoryEl.classList.add('visible');
   startTimer();
+  setupPushNotifications();
+}
+
+// ── Chat history ──────────────────────────────────────────────────────
+function addUserMessage(text) {
+  const el = document.createElement('div');
+  el.className = 'chat-msg user';
+  el.textContent = `"${text}"`;
+  chatHistoryEl.appendChild(el);
+  scrollChat();
+  return el;
+}
+
+function addAiMessageBubble(text = '') {
+  const el = document.createElement('div');
+  el.className = 'chat-msg ai';
+  el.textContent = text;
+  chatHistoryEl.appendChild(el);
+  scrollChat();
+  return el;
+}
+
+function scrollChat() {
+  chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+}
+
+function clearChat() {
+  chatHistoryEl.innerHTML = '';
+  chatHistoryEl.classList.remove('visible');
 }
 
 // ── VAD — start ───────────────────────────────────────────────────────
@@ -107,7 +136,6 @@ async function startVAD() {
 
   vadRunning = true;
   setState('standby');
-  clearTranscript();
   contextCard.classList.remove('visible');
   runVAD();
 }
@@ -116,7 +144,6 @@ async function startVAD() {
 function runVAD() {
   if (!vadRunning || !analyser) return;
 
-  // Pause while backend is busy
   if (appState === 'processing' || appState === 'speaking') {
     setTimeout(runVAD, 200);
     return;
@@ -136,15 +163,14 @@ function runVAD() {
     }
 
     analyser.getByteFrequencyData(freqData);
-    // Focus on speech frequencies (300 Hz–3 kHz for a 512-point FFT at ~44 kHz)
-    const speechBins = freqData.slice(3, 36);
+    const speechBins = freqData.slice(3, 36); // ~300 Hz–3 kHz
     const avg = speechBins.reduce((a, b) => a + b, 0) / speechBins.length;
     const hasSpeech = avg > SPEECH_THRESHOLD;
 
     if (hasSpeech) {
       silenceAt = null;
       if (!isSpeaking && appState === 'standby') {
-        isSpeaking   = true;
+        isSpeaking    = true;
         speechStartAt = Date.now();
         beginRecording();
       }
@@ -157,10 +183,9 @@ function runVAD() {
         isSpeaking = false;
         silenceAt  = null;
         if (speechDuration >= MIN_SPEECH_MS) {
-          endRecording(); // processAudio will restart the loop
+          endRecording();
           return;
         }
-        // Too short — ignore, stay in standby
         cancelRecording();
       }
     }
@@ -171,7 +196,7 @@ function runVAD() {
   tick();
 }
 
-// ── VAD — stop (end session) ─────────────────────────────────────────
+// ── VAD — stop (fin de session) ───────────────────────────────────────
 function stopVAD() {
   vadRunning = false;
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
@@ -198,8 +223,6 @@ function beginRecording() {
   mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
   mediaRecorder.start(100);
   setState('listening');
-  clearTranscript();
-  contextCard.classList.remove('visible');
 }
 
 function endRecording() {
@@ -207,7 +230,6 @@ function endRecording() {
   setState('processing');
   mediaRecorder.onstop = () => processAudio();
   mediaRecorder.stop();
-  // Stream stays alive for next utterance
 }
 
 function cancelRecording() {
@@ -219,7 +241,7 @@ function cancelRecording() {
   runVAD();
 }
 
-// ── Process audio → API ───────────────────────────────────────────────
+// ── Process audio → SSE streaming ─────────────────────────────────────
 async function processAudio() {
   const mimeType = mediaRecorder?.mimeType || 'audio/webm';
   const ext  = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
@@ -228,35 +250,110 @@ async function processAudio() {
   const formData = new FormData();
   formData.append('audio', blob, `voice.${ext}`);
 
+  let aiEl       = null;
+  let aiText     = '';
+  let audioUrl   = null;
+  let gotAction  = false;
+  let actionData = null;
+
   try {
-    const res = await fetch('/voice/transcribe', {
-      method: 'POST',
+    const res = await fetch('/voice/stream', {
+      method:  'POST',
       headers: { 'x-session-id': SESSION_ID },
-      body: formData,
+      body:    formData,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
 
-    showUserText(data.transcript);
-    showAiText(data.response);
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer    = '';
 
-    if (data.showCard || data.tasks) renderContextCard(data.tasks);
-    if (data.isAction && data.actionData) showConfirm(data.actionData);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // garde la ligne incomplète
 
-    setState('speaking');
-    await playAudio(data.audioUrl);
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+        switch (evt.type) {
+          case 'transcript':
+            addUserMessage(evt.text);
+            aiEl   = addAiMessageBubble();
+            aiText = '';
+            break;
+
+          case 'token':
+            if (aiEl) {
+              aiText += evt.text;
+              aiEl.textContent = aiText;
+              scrollChat();
+            }
+            break;
+
+          case 'action':
+            gotAction  = true;
+            actionData = evt.data;
+            if (aiEl && evt.data?.confirmation_message) {
+              aiEl.textContent = evt.data.confirmation_message;
+            }
+            if (evt.autoConfirm) {
+              // Lecture seule : auto-confirm sans overlay
+              autoConfirmAction(evt.data);
+            } else {
+              showConfirm(evt.data);
+            }
+            break;
+
+          case 'audio':
+            audioUrl = evt.url;
+            break;
+
+          case 'error':
+            showToast('Erreur : ' + evt.message);
+            break;
+        }
+      }
+    }
+
+    if (audioUrl) {
+      setState('speaking');
+      await playAudio(audioUrl);
+    }
   } catch (err) {
     console.error('[processAudio]', err);
     showToast('Erreur : ' + err.message);
   }
 
-  // Back to standby and restart VAD loop
-  if (vadRunning) {
-    setState('standby');
-    runVAD();
-  } else {
-    setState('idle');
+  // Redémarre le VAD sauf si on attend une confirmation manuelle
+  const waitingForConfirm = gotAction && actionData && !actionData?.autoConfirm;
+  if (!waitingForConfirm) {
+    if (vadRunning) { setState('standby'); runVAD(); }
+    else setState('idle');
   }
+}
+
+// ── Auto-confirm (actions lecture seule) ─────────────────────────────
+async function autoConfirmAction(actionData) {
+  try {
+    const res  = await fetch('/voice/confirm', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ actionData, sessionId: SESSION_ID }),
+    });
+    const data = await res.json();
+    const el = addAiMessageBubble(data.response);
+    scrollChat();
+    setState('speaking');
+    await playAudio(data.audioUrl);
+  } catch {
+    showToast('Erreur lors de la récupération des données');
+  }
+  if (vadRunning) { setState('standby'); runVAD(); } else setState('idle');
 }
 
 // ── TTS playback ──────────────────────────────────────────────────────
@@ -267,21 +364,6 @@ function playAudio(url) {
     audio.onerror = () => { console.warn('TTS error'); resolve(); };
     audio.play().catch(resolve);
   });
-}
-
-// ── Transcript display ─────────────────────────────────────────────────
-function showUserText(text) {
-  userText.textContent = `"${text}"`;
-  userText.classList.add('visible');
-  aiText.classList.remove('visible');
-  aiText.textContent = '';
-}
-function showAiText(text) {
-  aiText.textContent = text;
-  aiText.classList.add('visible');
-}
-function clearTranscript() {
-  [userText, aiText].forEach(el => { el.classList.remove('visible'); el.textContent = ''; });
 }
 
 // ── Context card ──────────────────────────────────────────────────────
@@ -315,40 +397,42 @@ function escHtml(str) {
 }
 
 // ── Confirm overlay ────────────────────────────────────────────────────
-function showConfirm(actionData) {
-  pendingAction = actionData;
-  confirmMsg.textContent = actionData.confirmation_message || 'Confirmes-tu cette action ?';
+function showConfirm(action) {
+  pendingAction = action;
+  confirmMsg.textContent = action.confirmation_message || 'Confirmes-tu cette action ?';
   confirmOverlay.classList.add('visible');
 }
 
 async function confirmAction() {
   if (!pendingAction) return;
-  confirmBtnEl.disabled = true;
+  confirmBtnEl.disabled  = true;
   confirmBtnEl.textContent = '…';
   try {
     const res  = await fetch('/voice/confirm', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actionData: pendingAction, sessionId: SESSION_ID }),
+      body:    JSON.stringify({ actionData: pendingAction, sessionId: SESSION_ID }),
     });
     const data = await res.json();
     confirmOverlay.classList.remove('visible');
     pendingAction = null;
-    showAiText(data.response);
+    addAiMessageBubble(data.response);
+    scrollChat();
     setState('speaking');
     await playAudio(data.audioUrl);
-    if (vadRunning) { setState('standby'); runVAD(); } else setState('idle');
   } catch {
     showToast('Erreur lors de la confirmation');
   } finally {
-    confirmBtnEl.disabled = false;
+    confirmBtnEl.disabled  = false;
     confirmBtnEl.textContent = 'Confirmer';
   }
+  if (vadRunning) { setState('standby'); runVAD(); } else setState('idle');
 }
 
 function cancelAction() {
   pendingAction = null;
   confirmOverlay.classList.remove('visible');
+  if (vadRunning) { setState('standby'); runVAD(); } else setState('idle');
 }
 
 // ── End session ────────────────────────────────────────────────────────
@@ -357,7 +441,7 @@ function endSession() {
   clearInterval(sessionInterval);
   stopWave();
   setState('idle');
-  clearTranscript();
+  clearChat();
   contextCard.classList.remove('visible');
   sessionStarted  = false;
   sessionSeconds  = 0;
@@ -365,6 +449,7 @@ function endSession() {
   greeting.classList.remove('hidden');
   tapBtn.classList.remove('hidden');
   endBtn.classList.add('hidden');
+  startWakeWord();
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────
@@ -414,6 +499,90 @@ function stopWave() {
   waveWrap.classList.remove('visible');
 }
 
+// ── Wake word — "Levco" (Web Speech API) ──────────────────────────────
+let wakeRecognition = null;
+
+function startWakeWord() {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) return;
+
+  wakeRecognition = new SpeechRec();
+  wakeRecognition.lang = 'fr-FR';
+  wakeRecognition.continuous = true;
+  wakeRecognition.interimResults = true;
+
+  wakeRecognition.onresult = e => {
+    const text = Array.from(e.results)
+      .map(r => r[0].transcript)
+      .join(' ')
+      .toLowerCase();
+    if ((text.includes('levco') || text.includes('lev co')) && appState === 'idle') {
+      wakeRecognition.stop();
+      startVAD();
+    }
+  };
+
+  wakeRecognition.onerror = () => {};
+
+  // Redémarre automatiquement tant qu'en veille
+  wakeRecognition.onend = () => {
+    if (appState === 'idle' && !sessionStarted) {
+      setTimeout(() => { try { wakeRecognition.start(); } catch {} }, 1000);
+    }
+  };
+
+  try { wakeRecognition.start(); } catch {}
+}
+
+function stopWakeWord() {
+  if (wakeRecognition) {
+    try { wakeRecognition.stop(); } catch {}
+    wakeRecognition = null;
+  }
+}
+
+// ── Push notifications ────────────────────────────────────────────────
+function urlBase64ToUint8Array(base64) {
+  const pad = '='.repeat((4 - base64.length % 4) % 4);
+  const b64 = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function setupPushNotifications() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+  if (Notification.permission === 'denied') return;
+
+  try {
+    const keyRes = await fetch('/voice/push/vapid-key');
+    if (!keyRes.ok) return; // push non configuré
+    const { publicKey } = await keyRes.json();
+
+    if (Notification.permission === 'default') {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return;
+    }
+
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+
+    await fetch('/voice/push/subscribe', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ subscription: sub.toJSON(), sessionId: SESSION_ID }),
+    });
+    console.log('[push] subscribed');
+  } catch (err) {
+    console.warn('[push] setup failed:', err.message);
+  }
+}
+
 // ── Keyboard shortcut — Space ─────────────────────────────────────────
 document.addEventListener('keydown', e => {
   if (e.code !== 'Space' || e.target !== document.body) return;
@@ -424,12 +593,10 @@ document.addEventListener('keydown', e => {
 // ── Click / tap — activate ─────────────────────────────────────────────
 function handleActivate() { if (!sessionStarted) startVAD(); }
 
-orbWrap.addEventListener('click', handleActivate);
-tapBtn.addEventListener('click',  handleActivate);
-
+orbWrap.addEventListener('click',      handleActivate);
+tapBtn.addEventListener('click',       handleActivate);
 orbWrap.addEventListener('touchstart', e => { e.preventDefault(); handleActivate(); }, { passive: false });
 tapBtn.addEventListener('touchstart',  e => { e.preventDefault(); handleActivate(); }, { passive: false });
-
 orbWrap.addEventListener('contextmenu', e => e.preventDefault());
 tapBtn.addEventListener('contextmenu',  e => e.preventDefault());
 
@@ -440,3 +607,4 @@ if ('serviceWorker' in navigator) {
 
 // ── Init ───────────────────────────────────────────────────────────────
 setState('idle');
+startWakeWord();
