@@ -22,7 +22,7 @@
 
 const fetch = require('node-fetch'); // node 18+ : fetch natif disponible
 
-const BRAIN_URL = process.env.N8N_BRAIN_URL; // ex: https://n8n.srv1011354.hstgr.cloud/webhook/levco-operator
+const BRAIN_URL = process.env.N8N_BRAIN_URL; // ex: https://n8n.srv1011354.hstgr.cloud/webhook/levco-router
 
 async function callLevcoBrain(transcript, sessionId = 'default') {
   if (!BRAIN_URL) throw new Error('N8N_BRAIN_URL non configuré');
