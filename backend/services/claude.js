@@ -1,6 +1,10 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const { OpenAI } = require('openai');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+let _client = null;
+function getClient() {
+  if (!_client) _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _client;
+}
 
 const SYSTEM_PROMPT = `Tu es un assistant commercial vocal.
 Tu aides un commercial B2B à gérer son activité depuis sa voiture.
@@ -25,18 +29,18 @@ ACTIONS DISPONIBLES :
 
 async function chat(userMessage, conversationHistory = []) {
   const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
     ...conversationHistory,
     { role: 'user', content: userMessage },
   ];
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o-mini',
     max_tokens: 512,
-    system: SYSTEM_PROMPT,
     messages,
   });
 
-  const assistantMessage = response.content[0].text;
+  const assistantMessage = response.choices[0].message.content;
 
   let parsed = null;
   try { parsed = JSON.parse(assistantMessage); } catch {}
@@ -46,7 +50,8 @@ async function chat(userMessage, conversationHistory = []) {
     parsed,
     isAction: parsed !== null && parsed.action !== undefined,
     updatedHistory: [
-      ...messages,
+      ...conversationHistory,
+      { role: 'user', content: userMessage },
       { role: 'assistant', content: assistantMessage },
     ],
   };
@@ -54,22 +59,23 @@ async function chat(userMessage, conversationHistory = []) {
 
 async function streamChat(userMessage, conversationHistory = [], onToken) {
   const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
     ...conversationHistory,
     { role: 'user', content: userMessage },
   ];
 
   let fullText = '';
 
-  const stream = client.messages.stream({
-    model: 'claude-sonnet-4-6',
+  const stream = await getClient().chat.completions.create({
+    model: 'gpt-4o-mini',
     max_tokens: 512,
-    system: SYSTEM_PROMPT,
     messages,
+    stream: true,
   });
 
-  for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-      const token = event.delta.text;
+  for await (const chunk of stream) {
+    const token = chunk.choices[0]?.delta?.content || '';
+    if (token) {
       fullText += token;
       if (onToken) onToken(token);
     }
@@ -83,7 +89,8 @@ async function streamChat(userMessage, conversationHistory = [], onToken) {
     parsed,
     isAction: parsed !== null && parsed.action !== undefined,
     updatedHistory: [
-      ...messages,
+      ...conversationHistory,
+      { role: 'user', content: userMessage },
       { role: 'assistant', content: fullText },
     ],
   };
