@@ -141,17 +141,37 @@
   }
   .status-label.active { color: var(--accent); }
 
-  .transcript {
-    margin-top: 28px; min-height: 52px; max-width: 480px;
-    width: 100%; text-align: center; padding: 0 8px;
-  }
-  .transcript-text {
-    font-size: 16px; font-weight: 300; line-height: 1.65;
+  /* ── Chat history ── */
+  .chat-history {
+    margin-top: 24px; width: 100%; max-width: 480px;
+    max-height: 200px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 0 4px;
     opacity: 0; transition: opacity .4s;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(124,92,252,.3) transparent;
   }
-  .transcript-text.visible { opacity: 1; }
-  .transcript-user   { color: rgba(196,170,255,.7); font-style: italic; }
-  .transcript-ai     { color: rgba(240,236,255,.9); margin-top: 10px; }
+  .chat-history.visible { opacity: 1; }
+  .chat-history::-webkit-scrollbar { width: 4px; }
+  .chat-history::-webkit-scrollbar-thumb { background: rgba(124,92,252,.3); border-radius: 2px; }
+  .chat-msg {
+    padding: 8px 14px; border-radius: 16px;
+    font-size: 14px; font-weight: 400; line-height: 1.55;
+    max-width: 88%; word-break: break-word;
+  }
+  .chat-msg.user {
+    align-self: flex-end;
+    background: rgba(124,92,252,.14);
+    border: 1px solid rgba(124,92,252,.22);
+    color: rgba(196,170,255,.85);
+    font-style: italic; font-size: 13px;
+  }
+  .chat-msg.ai {
+    align-self: flex-start;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08);
+    color: rgba(240,236,255,.9);
+  }
 
   /* ── Context card ── */
   .context-card {
@@ -294,10 +314,7 @@
 
     <div class="status-label" id="status-label">EN ÉCOUTE…</div>
 
-    <div class="transcript">
-      <div class="transcript-text transcript-user" id="user-text"></div>
-      <div class="transcript-text transcript-ai"  id="ai-text"></div>
-    </div>
+    <div class="chat-history" id="chat-history"></div>
   </div>
 
   <div class="bottom">

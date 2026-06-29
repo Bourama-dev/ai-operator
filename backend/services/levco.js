@@ -24,7 +24,7 @@ const fetch = require('node-fetch'); // node 18+ : fetch natif disponible
 
 const BRAIN_URL = process.env.N8N_BRAIN_URL; // ex: https://n8n.srv1011354.hstgr.cloud/webhook/levco-router
 
-async function callLevcoBrain(transcript, sessionId = 'default') {
+async function callLevcoBrain(transcript, sessionId = 'default', history = []) {
   if (!BRAIN_URL) throw new Error('N8N_BRAIN_URL non configuré');
 
   const res = await fetch(BRAIN_URL, {
@@ -33,7 +33,7 @@ async function callLevcoBrain(transcript, sessionId = 'default') {
       'Content-Type': 'application/json',
       ...(process.env.N8N_API_KEY && { Authorization: `Bearer ${process.env.N8N_API_KEY}` }),
     },
-    body: JSON.stringify({ transcript, sessionId }),
+    body: JSON.stringify({ transcript, sessionId, history }),
     // n8n peut être lent (appels CRM + Claude) — timeout généreux
     signal: AbortSignal.timeout(25000),
   });
