@@ -128,12 +128,12 @@ router.post('/stream', upload.single('audio'), async (req, res) => {
 
     // 3. Stream Claude token par token
     let isJsonMode = false;
+    let accumulated = '';
     const { raw, isAction, parsed } = await streamChat(transcript, history, (token) => {
-      // Détecte si Claude commence une réponse JSON (action)
+      accumulated += token;
       if (!isJsonMode) {
-        isJsonMode = raw.trimStart().startsWith('{');
+        isJsonMode = accumulated.trimStart().startsWith('{');
       }
-      // Ne stream que le texte conversationnel, pas le JSON brut
       if (!isJsonMode) send('token', { text: token });
     });
 
