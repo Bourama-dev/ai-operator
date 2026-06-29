@@ -1,17 +1,27 @@
-const { OpenAI } = require('openai');
+const { OpenAI, toFile } = require('openai');
 const fs = require('fs');
 
-// Lazy init — évite le crash au chargement si OPENAI_API_KEY manque
 let _client = null;
 function getClient() {
   if (!_client) _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return _client;
 }
 
-async function transcribeAudio(audioFilePath) {
-  const fileStream = fs.createReadStream(audioFilePath);
+const MIME_TO_EXT = {
+  'audio/webm': 'webm',
+  'audio/ogg':  'ogg',
+  'audio/mp4':  'm4a',
+  'audio/mpeg': 'mp3',
+  'audio/wav':  'wav',
+  'audio/flac': 'flac',
+};
+
+async function transcribeAudio(audioFilePath, mimeType = 'audio/webm') {
+  const base = mimeType.split(';')[0].trim();
+  const ext  = MIME_TO_EXT[base] || 'webm';
+  const file = await toFile(fs.createReadStream(audioFilePath), `audio.${ext}`, { type: base });
   const transcription = await getClient().audio.transcriptions.create({
-    file: fileStream,
+    file,
     model: 'whisper-1',
     language: 'fr',
   });

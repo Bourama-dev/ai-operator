@@ -119,7 +119,7 @@ router.post('/stream', upload.single('audio'), async (req, res) => {
 
   try {
     // 1. Transcription (bloquant, ~1-2s)
-    const transcript = await transcribeAudio(audioPath);
+    const transcript = await transcribeAudio(audioPath, req.file.mimetype);
     console.log(`[stream] "${transcript}" (session: ${sessionId})`);
     send('transcript', { text: transcript });
 
@@ -176,7 +176,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
   const audioPath = req.file.path;
 
   try {
-    const transcript = await transcribeAudio(audioPath);
+    const transcript = await transcribeAudio(audioPath, req.file.mimetype);
     console.log(`[transcribe] "${transcript}" (session: ${sessionId})`);
 
     const brain = await runBrain(transcript, sessionId);
