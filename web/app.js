@@ -2,9 +2,13 @@
 const SESSION_ID = `session-${Date.now()}`;
 
 // VAD tunables
-const SILENCE_MS       = 1500;
-const SPEECH_THRESHOLD = 15;
-const MIN_SPEECH_MS    = 400;
+const SILENCE_MS           = 1200;  // silence avant envoi
+const SPEECH_THRESHOLD     = 18;    // plancher minimum (environnement silencieux)
+const MIN_SPEECH_MS        = 600;   // durée minimale pour valider la parole
+const NOISE_FLOOR_SAMPLES  = 30;    // échantillons de calibration (~1.5s)
+const NOISE_FLOOR_RATIO    = 2.8;   // seuil = bruit * ratio (plus élevé = moins sensible)
+
+let dynamicThreshold = SPEECH_THRESHOLD; // recalibré à chaque session
 
 // ── DOM refs ────────────────────────────────────────────────────────
 const orb            = document.getElementById('orb');
@@ -122,7 +126,14 @@ async function startVAD() {
   activateSession();
 
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        noiseSuppression: true,
+        echoCancellation: true,
+        autoGainControl:  true,
+      },
+      video: false,
+    });
   } catch {
     showToast('Accès au microphone refusé');
     return;
@@ -130,14 +141,43 @@ async function startVAD() {
 
   audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
   analyser  = audioCtx.createAnalyser();
-  analyser.fftSize = 512;
-  analyser.smoothingTimeConstant = 0.4;
+  analyser.fftSize = 1024;              // meilleure résolution fréquentielle
+  analyser.smoothingTimeConstant = 0.6; // plus lisse = moins réactif aux transitoires
   audioCtx.createMediaStreamSource(micStream).connect(analyser);
 
   vadRunning = true;
   setState('standby');
   contextCard.classList.remove('visible');
+
+  // Calibration du bruit ambiant avant de démarrer le VAD
+  statusLabel.textContent = 'CALIBRATION…';
+  await calibrateNoiseFloor();
   runVAD();
+}
+
+// ── VAD — calibration bruit ambiant ──────────────────────────────────
+function calibrateNoiseFloor() {
+  return new Promise(resolve => {
+    const freqData = new Uint8Array(analyser.frequencyBinCount);
+    const samples  = [];
+
+    function sample() {
+      analyser.getByteFrequencyData(freqData);
+      const speechBins = freqData.slice(3, 36);
+      const avg = speechBins.reduce((a, b) => a + b, 0) / speechBins.length;
+      samples.push(avg);
+
+      if (samples.length < NOISE_FLOOR_SAMPLES) {
+        setTimeout(sample, 50);
+      } else {
+        const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+        dynamicThreshold = Math.max(SPEECH_THRESHOLD, mean * NOISE_FLOOR_RATIO);
+        console.log(`[VAD] bruit ambiant: ${mean.toFixed(1)} → seuil: ${dynamicThreshold.toFixed(1)}`);
+        resolve();
+      }
+    }
+    sample();
+  });
 }
 
 // ── VAD — main loop ───────────────────────────────────────────────────
@@ -165,7 +205,7 @@ function runVAD() {
     analyser.getByteFrequencyData(freqData);
     const speechBins = freqData.slice(3, 36); // ~300 Hz–3 kHz
     const avg = speechBins.reduce((a, b) => a + b, 0) / speechBins.length;
-    const hasSpeech = avg > SPEECH_THRESHOLD;
+    const hasSpeech = avg > dynamicThreshold;
 
     if (hasSpeech) {
       silenceAt = null;
