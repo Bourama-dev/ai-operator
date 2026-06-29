@@ -1,37 +1,48 @@
 // ── Config ─────────────────────────────────────────────────────────
 const SESSION_ID = `session-${Date.now()}`;
 
+// VAD tunables
+const SILENCE_MS       = 1500;  // silence duration before auto-send
+const SPEECH_THRESHOLD = 15;    // frequency amplitude 0-255
+const MIN_SPEECH_MS    = 400;   // ignore clips shorter than this
+
 // ── DOM refs ────────────────────────────────────────────────────────
-const orb         = document.getElementById('orb');
-const orbWrap     = document.getElementById('orb-wrap');
-const statusLabel = document.getElementById('status-label');
-const userText    = document.getElementById('user-text');
-const aiText      = document.getElementById('ai-text');
-const contextCard = document.getElementById('context-card');
-const taskList    = document.getElementById('task-list');
-const tapBtn      = document.getElementById('tap-btn');
-const endBtn      = document.getElementById('end-btn');
-const greeting    = document.getElementById('greeting');
-const waveWrap    = document.getElementById('wave-wrap');
-const canvas      = document.getElementById('wave-canvas');
-const ctx         = canvas.getContext('2d');
-const toast       = document.getElementById('toast');
+const orb            = document.getElementById('orb');
+const orbWrap        = document.getElementById('orb-wrap');
+const statusLabel    = document.getElementById('status-label');
+const userText       = document.getElementById('user-text');
+const aiText         = document.getElementById('ai-text');
+const contextCard    = document.getElementById('context-card');
+const taskList       = document.getElementById('task-list');
+const tapBtn         = document.getElementById('tap-btn');
+const endBtn         = document.getElementById('end-btn');
+const greeting       = document.getElementById('greeting');
+const waveWrap       = document.getElementById('wave-wrap');
+const canvas         = document.getElementById('wave-canvas');
+const ctx            = canvas.getContext('2d');
+const toast          = document.getElementById('toast');
 const confirmOverlay = document.getElementById('confirm-overlay');
 const confirmMsg     = document.getElementById('confirm-msg');
 const confirmBtnEl   = document.getElementById('confirm-btn');
 
 // ── State ────────────────────────────────────────────────────────────
-let appState        = 'idle';   // idle | listening | processing | speaking
-let sessionStarted  = false;
-let sessionSeconds  = 0;
+// idle | standby | listening | processing | speaking
+let appState      = 'idle';
+let sessionStarted = false;
+let sessionSeconds = 0;
 let sessionInterval = null;
-let waveAnimId      = null;
-let wavePhase       = 0;
-let mediaRecorder   = null;
-let audioChunks     = [];
-let micStream       = null;
-let pendingAction   = null;     // actionData awaiting confirmation
-let isHolding       = false;    // debounce double-fire on mobile
+let waveAnimId    = null;
+let wavePhase     = 0;
+let pendingAction = null;
+
+// VAD / recording
+let micStream      = null;
+let audioCtx       = null;
+let analyser       = null;
+let mediaRecorder  = null;
+let audioChunks    = [];
+let vadRunning     = false;
+let speechStartAt  = null;
 
 // ── Session timer ─────────────────────────────────────────────────────
 function startTimer() {
@@ -44,33 +55,28 @@ function startTimer() {
 }
 
 // ── State machine ─────────────────────────────────────────────────────
-function setState(newState) {
-  appState = newState;
+function setState(s) {
+  appState = s;
   orb.className = 'orb';
 
-  const labels = {
-    idle:       ['EN ÉCOUTE…',  false],
-    listening:  ['EN ÉCOUTE…',  true],
-    processing: ['ANALYSE…',    true],
-    speaking:   ['LEVCO PARLE', true],
+  const map = {
+    idle:       ['APPUYER POUR COMMENCER', false],
+    standby:    ['EN ATTENTE…',   true],
+    listening:  ['EN ÉCOUTE…',    true],
+    processing: ['ANALYSE…',      true],
+    speaking:   ['LEVCO PARLE',   true],
   };
-
-  const [label, active] = labels[newState] ?? ['', false];
+  const [label, active] = map[s] ?? ['', false];
   statusLabel.textContent = label;
   statusLabel.className = 'status-label' + (active ? ' active' : '');
 
-  if (newState === 'listening') {
-    orb.classList.add('listening');
-    startWave(0.45);
-  } else if (newState === 'speaking') {
-    orb.classList.add('speaking');
-    startWave(1.0);
-  } else {
-    stopWave();
-  }
+  if (s === 'standby')   { orb.classList.add('standby');    stopWave(); }
+  else if (s === 'listening')  { orb.classList.add('listening');  startWave(0.45); }
+  else if (s === 'speaking')   { orb.classList.add('speaking');   startWave(1.0); }
+  else stopWave();
 }
 
-// ── Activate session (first interaction) ──────────────────────────────
+// ── Activate session ─────────────────────────────────────────────────
 function activateSession() {
   if (sessionStarted) return;
   sessionStarted = true;
@@ -80,61 +86,143 @@ function activateSession() {
   startTimer();
 }
 
-// ── Audio recording ───────────────────────────────────────────────────
-function getBestMimeType() {
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/ogg;codecs=opus',
-    'audio/mp4',
-  ];
-  return candidates.find(t => MediaRecorder.isTypeSupported(t)) || '';
-}
-
-async function startRecording() {
-  if (isHolding) return;
-  if (appState === 'processing' || appState === 'speaking') return;
-  isHolding = true;
+// ── VAD — start ───────────────────────────────────────────────────────
+async function startVAD() {
+  if (vadRunning || appState === 'processing' || appState === 'speaking') return;
 
   activateSession();
 
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch {
     showToast('Accès au microphone refusé');
-    isHolding = false;
     return;
   }
 
-  const mimeType = getBestMimeType();
-  mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : undefined);
-  audioChunks = [];
-  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
-  mediaRecorder.start(100); // collect chunks every 100ms
+  audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+  analyser  = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.4;
+  audioCtx.createMediaStreamSource(micStream).connect(analyser);
 
+  vadRunning = true;
+  setState('standby');
+  clearTranscript();
+  contextCard.classList.remove('visible');
+  runVAD();
+}
+
+// ── VAD — main loop ───────────────────────────────────────────────────
+function runVAD() {
+  if (!vadRunning || !analyser) return;
+
+  // Pause while backend is busy
+  if (appState === 'processing' || appState === 'speaking') {
+    setTimeout(runVAD, 200);
+    return;
+  }
+
+  const freqData   = new Uint8Array(analyser.frequencyBinCount);
+  let   isSpeaking = false;
+  let   silenceAt  = null;
+
+  function tick() {
+    if (!vadRunning || !analyser) return;
+    if (appState === 'processing' || appState === 'speaking') {
+      isSpeaking = false;
+      silenceAt  = null;
+      setTimeout(tick, 300);
+      return;
+    }
+
+    analyser.getByteFrequencyData(freqData);
+    // Focus on speech frequencies (300 Hz–3 kHz for a 512-point FFT at ~44 kHz)
+    const speechBins = freqData.slice(3, 36);
+    const avg = speechBins.reduce((a, b) => a + b, 0) / speechBins.length;
+    const hasSpeech = avg > SPEECH_THRESHOLD;
+
+    if (hasSpeech) {
+      silenceAt = null;
+      if (!isSpeaking && appState === 'standby') {
+        isSpeaking   = true;
+        speechStartAt = Date.now();
+        beginRecording();
+      }
+    } else if (isSpeaking) {
+      if (!silenceAt) silenceAt = Date.now();
+      const silenceDuration = Date.now() - silenceAt;
+      const speechDuration  = Date.now() - speechStartAt;
+
+      if (silenceDuration >= SILENCE_MS) {
+        isSpeaking = false;
+        silenceAt  = null;
+        if (speechDuration >= MIN_SPEECH_MS) {
+          endRecording(); // processAudio will restart the loop
+          return;
+        }
+        // Too short — ignore, stay in standby
+        cancelRecording();
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  tick();
+}
+
+// ── VAD — stop (end session) ─────────────────────────────────────────
+function stopVAD() {
+  vadRunning = false;
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  micStream?.getTracks().forEach(t => t.stop());
+  audioCtx?.close();
+  micStream = null;
+  audioCtx  = null;
+  analyser  = null;
+  mediaRecorder = null;
+  audioChunks   = [];
+}
+
+// ── Recording helpers ─────────────────────────────────────────────────
+function getBestMimeType() {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  return candidates.find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+function beginRecording() {
+  if (!micStream) return;
+  const mimeType = getBestMimeType();
+  mediaRecorder  = new MediaRecorder(micStream, mimeType ? { mimeType } : undefined);
+  audioChunks    = [];
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.start(100);
   setState('listening');
   clearTranscript();
   contextCard.classList.remove('visible');
-  tapBtn.classList.add('holding');
 }
 
-async function stopRecording() {
-  if (!isHolding) return;
-  isHolding = false;
-  tapBtn.classList.remove('holding');
-
+function endRecording() {
   if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
-
+  setState('processing');
   mediaRecorder.onstop = () => processAudio();
   mediaRecorder.stop();
-  micStream?.getTracks().forEach(t => t.stop());
+  // Stream stays alive for next utterance
 }
 
-async function processAudio() {
-  setState('processing');
+function cancelRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+  mediaRecorder.stop();
+  mediaRecorder = null;
+  audioChunks   = [];
+  setState('standby');
+  runVAD();
+}
 
-  const mimeType = mediaRecorder.mimeType || 'audio/webm';
-  const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+// ── Process audio → API ───────────────────────────────────────────────
+async function processAudio() {
+  const mimeType = mediaRecorder?.mimeType || 'audio/webm';
+  const ext  = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
   const blob = new Blob(audioChunks, { type: mimeType });
 
   const formData = new FormData();
@@ -146,7 +234,6 @@ async function processAudio() {
       headers: { 'x-session-id': SESSION_ID },
       body: formData,
     });
-
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -158,21 +245,26 @@ async function processAudio() {
 
     setState('speaking');
     await playAudio(data.audioUrl);
-    setState('idle');
-
   } catch (err) {
     console.error('[processAudio]', err);
     showToast('Erreur : ' + err.message);
+  }
+
+  // Back to standby and restart VAD loop
+  if (vadRunning) {
+    setState('standby');
+    runVAD();
+  } else {
     setState('idle');
   }
 }
 
 // ── TTS playback ──────────────────────────────────────────────────────
 function playAudio(url) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const audio = new Audio(url);
     audio.onended = resolve;
-    audio.onerror = () => { console.warn('TTS playback error'); resolve(); };
+    audio.onerror = () => { console.warn('TTS error'); resolve(); };
     audio.play().catch(resolve);
   });
 }
@@ -184,25 +276,20 @@ function showUserText(text) {
   aiText.classList.remove('visible');
   aiText.textContent = '';
 }
-
 function showAiText(text) {
   aiText.textContent = text;
   aiText.classList.add('visible');
 }
-
 function clearTranscript() {
-  userText.classList.remove('visible');
-  aiText.classList.remove('visible');
-  userText.textContent = '';
-  aiText.textContent = '';
+  [userText, aiText].forEach(el => { el.classList.remove('visible'); el.textContent = ''; });
 }
 
 // ── Context card ──────────────────────────────────────────────────────
 const DEFAULT_TASKS = [
-  { icon:'✏️', name:'Signer la facture fournisseur', sub:'Fournitures Delta · 1 240 €',           tag:'Demain',       tagStyle:'red'    },
-  { icon:'📞', name:'Rappeler Marc',                 sub:'Attend ta réponse depuis 2 jours',       tag:'Avant midi',   tagStyle:'orange' },
-  { icon:'📄', name:'Valider le devis de Francine',  sub:'En attente de ton accord',               tag:"Aujourd'hui",  tagStyle:'yellow' },
-  { icon:'🔥', name:"Relancer l'Atelier Verso",      sub:'Prospect chaud, momentum à garder',      tag:'Cette semaine',tagStyle:'green'  },
+  { icon:'✏️', name:'Signer la facture fournisseur', sub:'Fournitures Delta · 1 240 €',      tag:'Demain',       tagStyle:'red'    },
+  { icon:'📞', name:'Rappeler Marc',                 sub:'Attend ta réponse depuis 2 jours',  tag:'Avant midi',   tagStyle:'orange' },
+  { icon:'📄', name:'Valider le devis de Francine',  sub:'En attente de ton accord',          tag:"Aujourd'hui",  tagStyle:'yellow' },
+  { icon:'🔥', name:"Relancer l'Atelier Verso",      sub:'Prospect chaud, momentum à garder', tag:'Cette semaine',tagStyle:'green'  },
 ];
 
 function renderContextCard(tasks) {
@@ -224,8 +311,7 @@ function renderContextCard(tasks) {
 
 function escHtml(str) {
   return String(str ?? '')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ── Confirm overlay ────────────────────────────────────────────────────
@@ -239,9 +325,8 @@ async function confirmAction() {
   if (!pendingAction) return;
   confirmBtnEl.disabled = true;
   confirmBtnEl.textContent = '…';
-
   try {
-    const res = await fetch('/voice/confirm', {
+    const res  = await fetch('/voice/confirm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actionData: pendingAction, sessionId: SESSION_ID }),
@@ -249,12 +334,11 @@ async function confirmAction() {
     const data = await res.json();
     confirmOverlay.classList.remove('visible');
     pendingAction = null;
-
     showAiText(data.response);
     setState('speaking');
     await playAudio(data.audioUrl);
-    setState('idle');
-  } catch (err) {
+    if (vadRunning) { setState('standby'); runVAD(); } else setState('idle');
+  } catch {
     showToast('Erreur lors de la confirmation');
   } finally {
     confirmBtnEl.disabled = false;
@@ -269,17 +353,17 @@ function cancelAction() {
 
 // ── End session ────────────────────────────────────────────────────────
 function endSession() {
+  stopVAD();
   clearInterval(sessionInterval);
   stopWave();
   setState('idle');
   clearTranscript();
   contextCard.classList.remove('visible');
-  sessionStarted = false;
-  sessionSeconds = 0;
+  sessionStarted  = false;
+  sessionSeconds  = 0;
   document.getElementById('session-time').textContent = 'Session · 00:00';
   greeting.classList.remove('hidden');
   tapBtn.classList.remove('hidden');
-  tapBtn.classList.remove('holding');
   endBtn.classList.add('hidden');
 }
 
@@ -294,17 +378,13 @@ function showToast(msg) {
 function startWave(intensity) {
   waveWrap.classList.add('visible');
   if (waveAnimId) cancelAnimationFrame(waveAnimId);
-
   function draw() {
     canvas.width  = canvas.offsetWidth  * devicePixelRatio;
     canvas.height = canvas.offsetHeight * devicePixelRatio;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
     const W = canvas.width, H = canvas.height;
     wavePhase += 0.04;
-    const baseY = H * 0.55;
-    const amp   = H * 0.28 * intensity;
-
+    const baseY = H * 0.55, amp = H * 0.28 * intensity;
     [
       [0,   'rgba(124,92,252,0.35)'],
       [0.8, 'rgba(180,140,255,0.2)'],
@@ -318,13 +398,11 @@ function startWave(intensity) {
           + Math.sin((x / W) * Math.PI * 7 + wavePhase * 1.3 + offset) * amp * 0.4;
         ctx.lineTo(x, y);
       }
-      ctx.lineTo(W, H);
-      ctx.lineTo(0, H);
+      ctx.lineTo(W, H); ctx.lineTo(0, H);
       ctx.closePath();
       ctx.fillStyle = color;
       ctx.fill();
     });
-
     waveAnimId = requestAnimationFrame(draw);
   }
   draw();
@@ -336,20 +414,29 @@ function stopWave() {
   waveWrap.classList.remove('visible');
 }
 
-// ── Press-to-talk bindings ─────────────────────────────────────────────
-// Desktop: mousedown / mouseup
-orbWrap.addEventListener('mousedown', startRecording);
-tapBtn.addEventListener('mousedown',  startRecording);
-document.addEventListener('mouseup',  stopRecording);
+// ── Keyboard shortcut — Space ─────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.target !== document.body) return;
+  e.preventDefault();
+  if (!sessionStarted) startVAD();
+});
 
-// Mobile: touchstart / touchend (prevent ghost click)
-orbWrap.addEventListener('touchstart', e => { e.preventDefault(); startRecording(); }, { passive: false });
-tapBtn.addEventListener('touchstart',  e => { e.preventDefault(); startRecording(); }, { passive: false });
-document.addEventListener('touchend',  stopRecording);
+// ── Click / tap — activate ─────────────────────────────────────────────
+function handleActivate() { if (!sessionStarted) startVAD(); }
 
-// Prevent context menu on long-press
+orbWrap.addEventListener('click', handleActivate);
+tapBtn.addEventListener('click',  handleActivate);
+
+orbWrap.addEventListener('touchstart', e => { e.preventDefault(); handleActivate(); }, { passive: false });
+tapBtn.addEventListener('touchstart',  e => { e.preventDefault(); handleActivate(); }, { passive: false });
+
 orbWrap.addEventListener('contextmenu', e => e.preventDefault());
 tapBtn.addEventListener('contextmenu',  e => e.preventDefault());
+
+// ── PWA service worker ────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
 
 // ── Init ───────────────────────────────────────────────────────────────
 setState('idle');
