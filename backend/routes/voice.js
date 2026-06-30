@@ -19,6 +19,21 @@ const AUTO_CONFIRM_ACTIONS = new Set([
   'get_brief_matin', 'get_relances', 'prepare_meeting',
 ]);
 
+// Correspondance action GPT → intent attendu par le Router n8n
+const ACTION_TO_INTENT = {
+  get_emails:        'brief',
+  get_brief_matin:   'brief',
+  get_next_meeting:  'brief',
+  prepare_meeting:   'brief',
+  get_pipeline:      'pipeline',
+  get_relances:      'relances',
+  schedule_followup: 'relances',
+  send_email:        'email_suivi',
+  log_call:          'compte_rendu',
+  create_contact:    'create_contact',
+  update_deal:       'update_deal',
+};
+
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
@@ -80,13 +95,14 @@ async function triggerN8nAction(actionData) {
   const { action, data } = actionData;
 
   if (brainConfigured()) {
+    const intent = ACTION_TO_INTENT[action] || action;
     const res = await fetch(process.env.N8N_BRAIN_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(process.env.N8N_API_KEY && { Authorization: `Bearer ${process.env.N8N_API_KEY}` }),
       },
-      body: JSON.stringify({ action, data, confirmed: true }),
+      body: JSON.stringify({ action, intent, data, confirmed: true }),
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`n8n Brain action failed: ${res.status}`);

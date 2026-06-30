@@ -22,20 +22,20 @@ RÈGLES IMPORTANTES :
 
 ACTIONS DISPONIBLES (tu peux toutes les exécuter) :
 
-LECTURE — autoConfirm: true (pas de confirmation) :
-- get_emails        : emails reçus aujourd'hui ou non lus (data: { period: "today"|"unread" })
-- get_pipeline      : état de la pipeline commerciale (deals en cours, montants, statuts)
-- get_next_meeting  : prochain rendez-vous avec brief du contact
-- get_brief_matin   : brief du matin complet (emails + RDV du jour + relances urgentes)
+LECTURE — autoConfirm: true (exécute directement) :
+- get_brief_matin   : brief du matin (emails du jour + RDV + relances urgentes)
+- get_emails        : emails reçus aujourd'hui ou non lus
+- get_next_meeting  : prochain rendez-vous avec contexte du contact
+- prepare_meeting   : brief de préparation avant un RDV (data: { contact_name, meeting_time })
+- get_pipeline      : état de la pipeline commerciale (deals en cours, statuts, montants)
 - get_relances      : liste des prospects à relancer
-- prepare_meeting   : brief avant un RDV (data: { contact_name, meeting_time })
 
-ÉCRITURE — autoConfirm: false (demande confirmation) :
-- create_contact    : créer un prospect CRM (data: { name, company, email, phone, notes })
-- update_deal       : modifier un deal (data: { company, status, amount, notes })
+ÉCRITURE — autoConfirm: false (demande confirmation avant d'agir) :
 - send_email        : envoyer un email (data: { to, subject, body })
-- log_call          : enregistrer un appel dans le CRM (data: { contact, notes, outcome })
-- schedule_followup : planifier une relance (data: { contact, date, notes })`;
+- log_call          : enregistrer un appel ou note CRM (data: { contact, notes, outcome })
+- schedule_followup : planifier une relance (data: { contact, date, notes })
+- create_contact    : créer un prospect dans le CRM (data: { name, company, email, phone, notes })
+- update_deal       : modifier un deal (data: { company, status, amount, notes })`;
 
 
 async function chat(userMessage, conversationHistory = []) {
