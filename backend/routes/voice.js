@@ -14,7 +14,10 @@ const router = express.Router();
 const upload = multer({ dest: '/tmp/uploads/' });
 
 // Actions qui ne nécessitent pas de confirmation (lecture seule)
-const AUTO_CONFIRM_ACTIONS = new Set(['get_pipeline', 'get_next_meeting', 'prepare_meeting']);
+const AUTO_CONFIRM_ACTIONS = new Set([
+  'get_emails', 'get_pipeline', 'get_next_meeting',
+  'get_brief_matin', 'get_relances', 'prepare_meeting',
+]);
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
@@ -58,12 +61,17 @@ async function runBrain(transcript, sessionId) {
 
 function buildConfirmationText(action) {
   const messages = {
-    create_contact:  'Contact créé. Y a-t-il autre chose ?',
-    update_deal:     'Deal mis à jour. Y a-t-il autre chose ?',
-    send_email:      'Email envoyé. Y a-t-il autre chose ?',
-    prepare_meeting: 'Voici le brief de ton rendez-vous.',
-    get_pipeline:    'Voici ta pipeline.',
-    get_next_meeting:'Voici ton prochain rendez-vous.',
+    create_contact:   'Contact créé. Y a-t-il autre chose ?',
+    update_deal:      'Deal mis à jour. Y a-t-il autre chose ?',
+    send_email:       'Email envoyé. Y a-t-il autre chose ?',
+    log_call:         'Appel enregistré dans le CRM.',
+    schedule_followup:'Relance planifiée. Y a-t-il autre chose ?',
+    prepare_meeting:  'Voici le brief de ton rendez-vous.',
+    get_pipeline:     'Voici ta pipeline.',
+    get_next_meeting: 'Voici ton prochain rendez-vous.',
+    get_emails:       'Voici tes emails.',
+    get_brief_matin:  'Voici ton brief du matin.',
+    get_relances:     'Voici tes relances en attente.',
   };
   return messages[action] ?? "C'est fait. Y a-t-il autre chose ?";
 }
